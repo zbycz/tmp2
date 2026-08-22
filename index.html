@@ -1,0 +1,194 @@
+<!DOCTYPE html>
+<html lang="cs">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Cvičební timer</title>
+<style>
+  :root {
+    --bg: #10151c;
+    --panel: #18202b;
+    --fg: #f2f6fb;
+    --muted: #8ea0b5;
+    --accent: #45d18a;
+    --accent-2: #f0b429;
+    --ring: #253243;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    background: var(--bg);
+    color: var(--fg);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 24px;
+    padding: 24px;
+    text-align: center;
+    -webkit-user-select: none;
+    user-select: none;
+  }
+  h1 { font-size: 1.1rem; font-weight: 600; letter-spacing: .14em; text-transform: uppercase; color: var(--muted); margin: 0; }
+  #stage { font-size: 1.5rem; font-weight: 600; color: var(--accent-2); min-height: 1.6em; }
+  #time {
+    font-size: clamp(5rem, 32vw, 14rem);
+    font-weight: 800;
+    line-height: 1;
+    font-variant-numeric: tabular-nums;
+    letter-spacing: -.03em;
+  }
+  #progress { width: min(520px, 90vw); height: 10px; background: var(--ring); border-radius: 999px; overflow: hidden; }
+  #bar { height: 100%; width: 0%; background: var(--accent); transition: width .2s linear; }
+  #dots { display: flex; gap: 10px; }
+  .dot { width: 14px; height: 14px; border-radius: 50%; background: var(--ring); }
+  .dot.done { background: var(--accent); }
+  .dot.active { background: var(--accent-2); box-shadow: 0 0 0 5px rgba(240,180,41,.18); }
+  button {
+    font: inherit;
+    font-size: 1.5rem;
+    font-weight: 700;
+    padding: 24px 48px;
+    min-width: min(420px, 90vw);
+    border: 0;
+    border-radius: 20px;
+    background: var(--accent);
+    color: #06210f;
+    cursor: pointer;
+  }
+  button:active { transform: translateY(2px); }
+  button.secondary { background: var(--panel); color: var(--fg); font-size: 1rem; font-weight: 600; padding: 14px 28px; min-width: 0; }
+  #controls { display: flex; flex-direction: column; align-items: center; gap: 14px; }
+</style>
+</head>
+<body>
+  <h1>Cvičební timer</h1>
+  <div id="stage">Připraven</div>
+  <div id="time">40</div>
+  <div id="progress"><div id="bar"></div></div>
+  <div id="dots"></div>
+  <div id="controls">
+    <button id="main">Začít cyklus</button>
+    <button id="reset" class="secondary" hidden>Reset</button>
+  </div>
+
+<script>
+const WORK = 40;
+const EXERCISES = 2;
+const REPS = 2;
+
+const steps = [];
+for (let e = 1; e <= EXERCISES; e++) {
+  for (let r = 1; r <= REPS; r++) {
+    steps.push({ exercise: e, rep: r, last: r === REPS });
+  }
+}
+
+const timeEl = document.getElementById('time');
+const stageEl = document.getElementById('stage');
+const barEl = document.getElementById('bar');
+const dotsEl = document.getElementById('dots');
+const mainBtn = document.getElementById('main');
+const resetBtn = document.getElementById('reset');
+
+steps.forEach(() => {
+  const d = document.createElement('div');
+  d.className = 'dot';
+  dotsEl.appendChild(d);
+});
+const dots = [...dotsEl.children];
+
+let audioCtx = null;
+function beep(count) {
+  if (!audioCtx) return;
+  for (let i = 0; i < count; i++) {
+    const t = audioCtx.currentTime + i * 0.25;
+    const osc = audioCtx.createOscillator();
+    const gain = audioCtx.createGain();
+    osc.type = 'sine';
+    osc.frequency.value = count > 1 ? 1200 : 880;
+    gain.gain.setValueAtTime(0.0001, t);
+    gain.gain.exponentialRampToValueAtTime(0.35, t + 0.01);
+    gain.gain.exponentialRampToValueAtTime(0.0001, t + 0.18);
+    osc.connect(gain).connect(audioCtx.destination);
+    osc.start(t);
+    osc.stop(t + 0.2);
+  }
+}
+
+let index = 0;
+let deadline = 0;
+let ticker = null;
+let running = false;
+
+function render(remaining, step) {
+  timeEl.textContent = remaining;
+  barEl.style.width = (100 * (WORK - remaining) / WORK) + '%';
+  stageEl.textContent = step ? `Cvik ${step.exercise} / ${EXERCISES} · opakování ${step.rep} / ${REPS}` : 'Připraven';
+  dots.forEach((d, i) => {
+    d.classList.toggle('done', i < index);
+    d.classList.toggle('active', running && i === index);
+  });
+}
+
+function startStep() {
+  const step = steps[index];
+  deadline = Date.now() + WORK * 1000;
+  render(WORK, step);
+  ticker = setInterval(() => {
+    const remaining = Math.max(0, Math.ceil((deadline - Date.now()) / 1000));
+    render(remaining, step);
+    if (remaining <= 0) {
+      clearInterval(ticker);
+      ticker = null;
+      finishStep(step);
+    }
+  }, 100);
+}
+
+function finishStep(step) {
+  beep(step.last ? 3 : 1);
+  index++;
+  if (index < steps.length) {
+    startStep();
+  } else {
+    running = false;
+    stageEl.textContent = 'Hotovo! 💪';
+    timeEl.textContent = '0';
+    barEl.style.width = '100%';
+    dots.forEach(d => { d.classList.add('done'); d.classList.remove('active'); });
+    mainBtn.textContent = 'Začít další cyklus';
+    mainBtn.hidden = false;
+    resetBtn.hidden = true;
+  }
+}
+
+function startCycle() {
+  if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  if (audioCtx.state === 'suspended') audioCtx.resume();
+  index = 0;
+  running = true;
+  mainBtn.hidden = true;
+  resetBtn.hidden = false;
+  startStep();
+}
+
+function reset() {
+  if (ticker) clearInterval(ticker);
+  ticker = null;
+  running = false;
+  index = 0;
+  barEl.style.width = '0%';
+  render(WORK, null);
+  mainBtn.textContent = 'Začít cyklus';
+  mainBtn.hidden = false;
+  resetBtn.hidden = true;
+}
+
+mainBtn.addEventListener('click', startCycle);
+resetBtn.addEventListener('click', reset);
+render(WORK, null);
+</script>
+</body>
+</html>
