@@ -4,6 +4,14 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Cvičební timer</title>
+<link rel="manifest" href="manifest.webmanifest">
+<meta name="theme-color" content="#10151c">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Timer">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<link rel="icon" href="icons/icon-192.png" type="image/png">
 <style>
   :root {
     --bg: #10151c;
@@ -25,7 +33,7 @@
     align-items: center;
     justify-content: center;
     gap: 24px;
-    padding: 24px;
+    padding: calc(24px + env(safe-area-inset-top)) calc(24px + env(safe-area-inset-right)) calc(24px + env(safe-area-inset-bottom)) calc(24px + env(safe-area-inset-left));
     text-align: center;
     -webkit-user-select: none;
     user-select: none;
@@ -226,6 +234,7 @@ let deadline = 0;
 let ticker = null;
 let running = false;
 let wakeLock = null;
+let wakeLockBroken = false;
 
 async function keepScreenOn() {
   if (!('wakeLock' in navigator) || wakeLock) return;
@@ -234,6 +243,8 @@ async function keepScreenOn() {
     wakeLock.addEventListener('release', () => { wakeLock = null; });
   } catch (e) {
     wakeLock = null;
+    wakeLockBroken = true;
+    updateHints();
   }
 }
 
@@ -311,10 +322,20 @@ function reset() {
   resetBtn.hidden = true;
 }
 
-const hints = [];
-if (isApple) hints.push('iPhone: přepni boční přepínač na zvonění, jinak systém pípání ztlumí.');
-if (!('wakeLock' in navigator)) hints.push('Prohlížeč neumí držet displej rozsvícený – přidej si stránku na plochu, nebo si prodluž automatické zamykání.');
-document.getElementById('hint').textContent = hints.join(' ');
+function updateHints() {
+  const hints = [];
+  if (isApple) hints.push('iPhone: přepni boční přepínač na zvonění, jinak systém pípání ztlumí.');
+  if (!('wakeLock' in navigator) || wakeLockBroken) {
+    hints.push('Tenhle prohlížeč neumí držet displej rozsvícený – přidej si stránku na plochu (Sdílet → Přidat na plochu) a spusť ji odtamtud.');
+  }
+  document.getElementById('hint').textContent = hints.join(' ');
+}
+
+updateHints();
+
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', () => navigator.serviceWorker.register('sw.js').catch(() => {}));
+}
 
 mainBtn.addEventListener('click', startCycle);
 resetBtn.addEventListener('click', reset);
