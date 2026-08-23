@@ -60,6 +60,8 @@
   button:active { transform: translateY(2px); }
   button.secondary { background: var(--panel); color: var(--fg); font-size: 1rem; font-weight: 600; padding: 14px 28px; min-width: 0; }
   #controls { display: flex; flex-direction: column; align-items: center; gap: 14px; }
+  #hint { font-size: .85rem; line-height: 1.45; color: var(--muted); max-width: 34ch; }
+  #hint:empty { display: none; }
 </style>
 </head>
 <body>
@@ -72,6 +74,7 @@
     <button id="main">Začít cyklus</button>
     <button id="reset" class="secondary" hidden>Reset</button>
   </div>
+  <div id="hint"></div>
 
 <script>
 const WORK = 40;
@@ -99,23 +102,123 @@ steps.forEach(() => {
 });
 const dots = [...dotsEl.children];
 
+const AudioCtx = window.AudioContext || window.webkitAudioContext;
+const isApple = /iP(hone|ad|od)/.test(navigator.userAgent) ||
+  (navigator.maxTouchPoints > 1 && /Mac/.test(navigator.userAgent));
+
 let audioCtx = null;
+let silentLoop = null;
+let audioReady = false;
+
+function wavUrl(freq, seconds, amp) {
+  const rate = 44100;
+  const n = Math.round(rate * seconds);
+  const view = new DataView(new ArrayBuffer(44 + n * 2));
+  const ascii = (off, text) => { for (let i = 0; i < text.length; i++) view.setUint8(off + i, text.charCodeAt(i)); };
+  ascii(0, 'RIFF'); view.setUint32(4, 36 + n * 2, true); ascii(8, 'WAVEfmt ');
+  view.setUint32(16, 16, true); view.setUint16(20, 1, true); view.setUint16(22, 1, true);
+  view.setUint32(24, rate, true); view.setUint32(28, rate * 2, true);
+  view.setUint16(32, 2, true); view.setUint16(34, 16, true);
+  ascii(36, 'data'); view.setUint32(40, n * 2, true);
+  for (let i = 0; i < n; i++) {
+    const t = i / rate;
+    const env = Math.max(0, Math.min(1, t * 120, (seconds - t) * 60));
+    view.setInt16(44 + i * 2, Math.round(32767 * amp * env * Math.sin(2 * Math.PI * freq * t)), true);
+  }
+  return URL.createObjectURL(new Blob([view.buffer], { type: 'audio/wav' }));
+}
+
+function pool(url, size) {
+  return Array.from({ length: size }, () => {
+    const el = new Audio(url);
+    el.preload = 'auto';
+    el.playsInline = true;
+    return el;
+  });
+}
+
+const tones = { 880: pool(wavUrl(880, 0.2, 0.9), 3), 1200: pool(wavUrl(1200, 0.2, 0.9), 3) };
+const cursors = { 880: 0, 1200: 0 };
+
+function htmlTone(freq) {
+  const list = tones[freq];
+  const el = list[cursors[freq]++ % list.length];
+  try { el.currentTime = 0; } catch (e) {}
+  const played = el.play();
+  if (played) played.catch(() => {});
+}
+
+function webAudioTone(freq) {
+  const t = audioCtx.currentTime;
+  const osc = audioCtx.createOscillator();
+  const gain = audioCtx.createGain();
+  osc.type = 'sine';
+  osc.frequency.value = freq;
+  gain.gain.setValueAtTime(0.0001, t);
+  gain.gain.exponentialRampToValueAtTime(0.35, t + 0.01);
+  gain.gain.exponentialRampToValueAtTime(0.0001, t + 0.18);
+  osc.connect(gain).connect(audioCtx.destination);
+  osc.start(t);
+  osc.stop(t + 0.2);
+}
+
+function tone(freq) {
+  if (audioCtx && audioCtx.state === 'running') {
+    webAudioTone(freq);
+    return;
+  }
+  if (audioCtx) audioCtx.resume().catch(() => {});
+  htmlTone(freq);
+}
+
 function beep(count) {
-  if (!audioCtx) return;
+  const freq = count > 1 ? 1200 : 880;
   for (let i = 0; i < count; i++) {
-    const t = audioCtx.currentTime + i * 0.25;
-    const osc = audioCtx.createOscillator();
-    const gain = audioCtx.createGain();
-    osc.type = 'sine';
-    osc.frequency.value = count > 1 ? 1200 : 880;
-    gain.gain.setValueAtTime(0.0001, t);
-    gain.gain.exponentialRampToValueAtTime(0.35, t + 0.01);
-    gain.gain.exponentialRampToValueAtTime(0.0001, t + 0.18);
-    osc.connect(gain).connect(audioCtx.destination);
-    osc.start(t);
-    osc.stop(t + 0.2);
+    if (i === 0) tone(freq);
+    else setTimeout(() => tone(freq), i * 250);
   }
 }
+
+function unlockAudio() {
+  try { if (navigator.audioSession) navigator.audioSession.type = 'playback'; } catch (e) {}
+
+  if (!silentLoop) {
+    silentLoop = new Audio(wavUrl(1, 1, 0.0002));
+    silentLoop.loop = true;
+    silentLoop.playsInline = true;
+    silentLoop.preload = 'auto';
+  }
+  const loop = silentLoop.play();
+  if (loop) loop.catch(() => {});
+
+  Object.values(tones).flat().forEach(el => {
+    const played = el.play();
+    if (played) played.then(() => { el.pause(); el.currentTime = 0; }).catch(() => {});
+  });
+
+  if (!audioCtx && AudioCtx) audioCtx = new AudioCtx();
+  if (audioCtx) {
+    audioCtx.resume().catch(() => {});
+    const src = audioCtx.createBufferSource();
+    src.buffer = audioCtx.createBuffer(1, 1, 22050);
+    src.connect(audioCtx.destination);
+    src.start(0);
+  }
+  audioReady = true;
+}
+
+function stopSilentLoop() {
+  if (silentLoop) silentLoop.pause();
+}
+
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState !== 'visible' || !audioReady) return;
+  if (audioCtx && audioCtx.state !== 'running') audioCtx.resume().catch(() => {});
+  if (running && silentLoop && silentLoop.paused) {
+    const loop = silentLoop.play();
+    if (loop) loop.catch(() => {});
+  }
+});
 
 let index = 0;
 let deadline = 0;
@@ -154,6 +257,7 @@ function finishStep(step) {
     startStep();
   } else {
     running = false;
+    stopSilentLoop();
     stageEl.textContent = 'Hotovo! 💪';
     timeEl.textContent = '0';
     barEl.style.width = '100%';
@@ -165,8 +269,7 @@ function finishStep(step) {
 }
 
 function startCycle() {
-  if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-  if (audioCtx.state === 'suspended') audioCtx.resume();
+  unlockAudio();
   index = 0;
   running = true;
   mainBtn.hidden = true;
@@ -178,12 +281,18 @@ function reset() {
   if (ticker) clearInterval(ticker);
   ticker = null;
   running = false;
+  stopSilentLoop();
   index = 0;
   barEl.style.width = '0%';
   render(WORK, null);
   mainBtn.textContent = 'Začít cyklus';
   mainBtn.hidden = false;
   resetBtn.hidden = true;
+}
+
+if (isApple) {
+  document.getElementById('hint').textContent =
+    'iPhone: přepni boční přepínač na zvonění, jinak systém pípání ztlumí.';
 }
 
 mainBtn.addEventListener('click', startCycle);
