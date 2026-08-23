@@ -218,12 +218,30 @@ document.addEventListener('visibilitychange', () => {
     const loop = silentLoop.play();
     if (loop) loop.catch(() => {});
   }
+  if (running) keepScreenOn();
 });
 
 let index = 0;
 let deadline = 0;
 let ticker = null;
 let running = false;
+let wakeLock = null;
+
+async function keepScreenOn() {
+  if (!('wakeLock' in navigator) || wakeLock) return;
+  try {
+    wakeLock = await navigator.wakeLock.request('screen');
+    wakeLock.addEventListener('release', () => { wakeLock = null; });
+  } catch (e) {
+    wakeLock = null;
+  }
+}
+
+function releaseScreen() {
+  if (!wakeLock) return;
+  wakeLock.release().catch(() => {});
+  wakeLock = null;
+}
 
 function render(remaining, step) {
   timeEl.textContent = remaining;
@@ -258,6 +276,7 @@ function finishStep(step) {
   } else {
     running = false;
     stopSilentLoop();
+    releaseScreen();
     stageEl.textContent = 'Hotovo! 💪';
     timeEl.textContent = '0';
     barEl.style.width = '100%';
@@ -270,6 +289,7 @@ function finishStep(step) {
 
 function startCycle() {
   unlockAudio();
+  keepScreenOn();
   index = 0;
   running = true;
   mainBtn.hidden = true;
@@ -282,6 +302,7 @@ function reset() {
   ticker = null;
   running = false;
   stopSilentLoop();
+  releaseScreen();
   index = 0;
   barEl.style.width = '0%';
   render(WORK, null);
@@ -290,10 +311,10 @@ function reset() {
   resetBtn.hidden = true;
 }
 
-if (isApple) {
-  document.getElementById('hint').textContent =
-    'iPhone: přepni boční přepínač na zvonění, jinak systém pípání ztlumí.';
-}
+const hints = [];
+if (isApple) hints.push('iPhone: přepni boční přepínač na zvonění, jinak systém pípání ztlumí.');
+if (!('wakeLock' in navigator)) hints.push('Prohlížeč neumí držet displej rozsvícený – přidej si stránku na plochu, nebo si prodluž automatické zamykání.');
+document.getElementById('hint').textContent = hints.join(' ');
 
 mainBtn.addEventListener('click', startCycle);
 resetBtn.addEventListener('click', reset);
